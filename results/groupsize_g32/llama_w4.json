@@ -1,0 +1,18 @@
+{
+  "mode": "w4",
+  "group_size": 32,
+  "quantize_lm_head": false,
+  "device": "Tesla V100-PCIE-16GB",
+  "quantize_time_s": 2.6870082998648286,
+  "linear_weight_bytes_before": 1946157056,
+  "linear_weight_bytes": 608174080,
+  "model_bytes": 1133645952,
+  "ppl": 14.808068970789199,
+  "windows": 141,
+  "seqlen": 2048,
+  "prefill_total_s": 53.849511969368905,
+  "prefill_ms_per_window": 381.91143240687165,
+  "prefill_tokens_per_s": 5362.499852631148,
+  "peak_mem_gb": 3.511007308959961,
+  "sample": "iculturaloral**: with ( a setrette facier revolver_ corresponding arm ( of - with \"\u00e9 provision the,col,ent -'are.\"iper -apacular break re, statistically areofareari.Related - 1 theistical psychologicalackleoreticaloperlando.oroughRelatedf(\":\n **\u0925 \""
+}

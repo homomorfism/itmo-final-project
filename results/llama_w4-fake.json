@@ -1,0 +1,22 @@
+{
+  "mode": "w4-fake",
+  "group_size": 128,
+  "quantize_lm_head": false,
+  "device": "Tesla V100-PCIE-16GB",
+  "quantize_time_s": 2.90948459203355,
+  "linear_weight_bytes_before": 1946157056,
+  "linear_weight_bytes": 1946157056,
+  "model_bytes": 2471628928,
+  "ppl": 16.43172285909693,
+  "windows": 141,
+  "seqlen": 2048,
+  "prefill_total_s": 98.69440552825108,
+  "prefill_ms_per_window": 699.9603228953978,
+  "prefill_tokens_per_s": 2925.880129217058,
+  "peak_mem_gb": 4.757101058959961,
+  "decode_tokens_per_s": 139.88776831256382,
+  "decode_ms_per_token": 7.14858784340322,
+  "cuda_graph": true,
+  "decode_eager_tokens_per_s": 21.558900069942105,
+  "sample": "Weight quantization is a technique used in neural networks to reduce the number of parameters (weights) in the model, making it more efficient and computationally friendly. By assigning a unique integer value to each weight, the model's parameters are effectively \"quantized\" into a fixed-size set, allowing for more compact and efficient"
+}

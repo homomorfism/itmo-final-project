@@ -1,0 +1,22 @@
+{
+  "mode": "triton-w16",
+  "group_size": null,
+  "quantize_lm_head": false,
+  "device": "Tesla V100-PCIE-16GB",
+  "quantize_time_s": 0.00540557992644608,
+  "linear_weight_bytes_before": 1946157056,
+  "linear_weight_bytes": 1946157056,
+  "model_bytes": 2471628928,
+  "ppl": 13.163740666235281,
+  "windows": 141,
+  "seqlen": 2048,
+  "prefill_total_s": 51.70901025389321,
+  "prefill_ms_per_window": 366.7305691765476,
+  "prefill_tokens_per_s": 5584.481284444202,
+  "peak_mem_gb": 4.757101058959961,
+  "decode_tokens_per_s": 108.72689360651489,
+  "decode_ms_per_token": 9.197356484946795,
+  "cuda_graph": true,
+  "decode_eager_tokens_per_s": 16.073474035808022,
+  "sample": "Weight quantization is a technique used in neural networks where the weights and biases are represented as integers instead of floating-point numbers, which can lead to significant reductions in computation requirements and energy consumption. This approach is particularly useful for mobile devices, edge AI, and other applications where computational resources are limited, as it can improve the"
+}

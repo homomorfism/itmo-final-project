@@ -1,0 +1,29 @@
+[project]
+name = "int4-triton"
+version = "0.1.0"
+description = "Triton int4 weight quantization + W4A16 GEMM for Llama-3.2-1B"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "torch==2.5.1",
+    "triton==3.1.0",
+    "transformers>=4.46,<4.50",
+    "datasets>=3.0",
+    "accelerate>=1.0",
+    "numpy<2.3",
+    "tqdm",
+    "pytest",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu121" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

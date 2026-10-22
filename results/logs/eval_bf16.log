@@ -1,0 +1,19 @@
+Token indices sequence length is longer than the specified maximum sequence length for this model (289077 > 131072). Running this sequence through the model will result in indexing errors
+/home/shamilarsl/Projects/itmo-final-project/.venv/lib/python3.12/site-packages/transformers/generation/configuration_utils.py:629: UserWarning: `do_sample` is set to `False`. However, `temperature` is set to `0.6` -- this flag is only used in sample-based generation modes. You should set `do_sample=True` or unset `temperature`.
+  warnings.warn(
+/home/shamilarsl/Projects/itmo-final-project/.venv/lib/python3.12/site-packages/transformers/generation/configuration_utils.py:634: UserWarning: `do_sample` is set to `False`. However, `top_p` is set to `0.9` -- this flag is only used in sample-based generation modes. You should set `do_sample=True` or unset `top_p`.
+  warnings.warn(
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+{
+  "mode": "bf16",
+  "group_size": null,
+  "quantize_lm_head": false,
+  "device": "Tesla V100-PCIE-16GB",
+  "quantize_time_s": 0.0001295851543545723,
+  "linear_weight_bytes_before": 1946157056,
+  "linear_weight_bytes": 1946157056,
+  "model_bytes": 2471628928
+}
+ppl=13.1630  prefill 700.4 ms/window (2924 tok/s)
+decode 139.6 tok/s (graph=True), eager 20.2 tok/s
+sample: Weight quantization is a technique used in neural networks where the weights and biases are represented as integers instead of floating-point numbers, which can lead to significant reductions in computation requirements and energy consumption. This approach is particularly useful for mobile devices, edge AI, and other applications where computational resources are limited, as it can improve the

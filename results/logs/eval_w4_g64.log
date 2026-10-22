@@ -1,0 +1,18 @@
+Token indices sequence length is longer than the specified maximum sequence length for this model (289077 > 131072). Running this sequence through the model will result in indexing errors
+/home/shamilarsl/Projects/itmo-final-project/.venv/lib/python3.12/site-packages/transformers/generation/configuration_utils.py:629: UserWarning: `do_sample` is set to `False`. However, `temperature` is set to `0.6` -- this flag is only used in sample-based generation modes. You should set `do_sample=True` or unset `temperature`.
+  warnings.warn(
+/home/shamilarsl/Projects/itmo-final-project/.venv/lib/python3.12/site-packages/transformers/generation/configuration_utils.py:634: UserWarning: `do_sample` is set to `False`. However, `top_p` is set to `0.9` -- this flag is only used in sample-based generation modes. You should set `do_sample=True` or unset `top_p`.
+  warnings.warn(
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+{
+  "mode": "w4",
+  "group_size": 64,
+  "quantize_lm_head": false,
+  "device": "Tesla V100-PCIE-16GB",
+  "quantize_time_s": 3.283739065984264,
+  "linear_weight_bytes_before": 1946157056,
+  "linear_weight_bytes": 547356672,
+  "model_bytes": 1072828544
+}
+ppl=15.4199  prefill 381.5 ms/window (5368 tok/s)
+sample: Weight quantization is a technique used in neural networks to reduce the number of weights and biases, making the network more efficient and computationally friendly. By representing each weight as a binary value (0 or 1), the network's parameters are effectively "quantized" into a smaller number of bits, which can be stored
