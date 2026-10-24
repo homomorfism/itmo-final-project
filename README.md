@@ -1,8 +1,8 @@
-# INT4 weight quantization + W4A16 GEMM in Triton (Llama-3.2-1B-Instruct)
+# INT4-квантование весов и W4A16 GEMM на Triton (Llama-3.2-1B-Instruct)
 
-Measured on **NVIDIA H200 (sm_90)** on 2026-10-24: Python 3.12.3, torch 2.5.1+cu121, Triton 3.1.0, transformers 4.49.0, NVIDIA driver 580.196.07. Native bf16 tensor cores are enabled. Dependencies are unchanged and installed with `uv sync --frozen`.
+Измерения выполнены на **NVIDIA H200 (sm_90)** 24 октября 2026 года: Python 3.12.3, torch 2.5.1+cu121, Triton 3.1.0, transformers 4.49.0, драйвер NVIDIA 580.196.07. Используются нативные bf16 tensor cores. Зависимости не менялись и установлены командой `uv sync --frozen`.
 
-Kernel measurements and correctness tests use physical GPU 4; model evaluations use physical GPU 5. Both were idle before use; final reported timing runs sharing a GPU are sequential. GPU identities and software versions are recorded in [hardware.json](results/h200/hardware.json). No power limits or clocks were changed.
+Для измерений kernels и проверок корректности использовалась физическая GPU 4, для оценки моделей — GPU 5. Обе GPU были свободны перед началом работы; итоговые замеры на каждой GPU выполнялись последовательно. Идентификаторы GPU и версии ПО записаны в [hardware.json](results/h200/hardware.json). Ограничения мощности и частоты не менялись.
 
 ```bash
 uv sync --frozen
@@ -10,53 +10,53 @@ CUDA_VISIBLE_DEVICES=4 uv run pytest -q tests
 CUDA_VISIBLE_DEVICES=4 uv run python -m benchmarks.bench_gemm --out results/h200/gemm.json
 CUDA_VISIBLE_DEVICES=5 uv run python -m benchmarks.eval_llama --mode bf16 --out-dir results/h200
 CUDA_VISIBLE_DEVICES=5 uv run python -m benchmarks.eval_llama --mode w4 --out-dir results/h200
-# Other comparisons: --mode fp16 / triton-w16 / w4-fake
-# Quantize the output projection too: --mode w4 --quantize-lm-head
-# Smaller groups: --mode w4 --group-size 64 --out-dir results/h200/groupsize_g64
+# Другие варианты для сравнения: --mode fp16 / triton-w16 / w4-fake
+# Квантование выходной проекции: --mode w4 --quantize-lm-head
+# Меньшие группы: --mode w4 --group-size 64 --out-dir results/h200/groupsize_g64
 #                --mode w4 --group-size 32 --out-dir results/h200/groupsize_g32
 ```
 
-All new measurements are in [results/h200](results/h200). The previous V100 report is preserved in [results/v100/README.md](results/v100/README.md); the historical V100 JSON files and logs remain at their original paths under `results/`. V100 and H200 numbers should not be mixed: the former uses fp16 emulation for bf16 and a different decode timing implementation.
+Все новые измерения находятся в [results/h200](results/h200). Прежний отчёт для V100 сохранён в [results/v100/README.md](results/v100/README.md), а исторические JSON и логи V100 — на прежних местах в `results/`. Числа V100 и H200 нельзя смешивать: на V100 bf16 вычислялся через преобразование в fp16, а для decode применялась другая реализация измерений. Список изменений и сравнение «до/после» — в [changelog.md](changelog.md).
 
-## Layout
+## Структура проекта
 
-| File | Content |
+| Файл | Содержание |
 |---|---|
-| `int4_triton/quantize.py` | Triton group-wise INT4 quantization, packed eight values per int32, and torch reference (step 1) |
-| `int4_triton/gemm.py` | Fused unpack/dequantize + GEMM, split-K reduction, decode GEMV, and W16 baseline (step 2) |
-| `int4_triton/qlinear.py` | `Int4Linear` and model conversion (step 4) |
-| `int4_triton/utils.py` | bf16 bit conversion helpers retained for the Volta fallback |
-| `benchmarks/bench_gemm.py` | Seven decoder-linear shapes, five token counts, CUDA-graph timing (step 3) |
-| `benchmarks/eval_llama.py` | WikiText-2 perplexity, prefill/decode timing, memory and sample generation (step 5) |
+| `int4_triton/quantize.py` | Групповое INT4-квантование на Triton, упаковка восьми значений в int32 и эталонная реализация на torch (шаг 1) |
+| `int4_triton/gemm.py` | Распаковка и деквантизация внутри GEMM, split-K редукция, GEMV для decode и базовая реализация W16 (шаг 2) |
+| `int4_triton/qlinear.py` | `Int4Linear` и преобразование модели (шаг 4) |
+| `int4_triton/utils.py` | Побитовые преобразования bf16 для совместимости с Volta |
+| `benchmarks/bench_gemm.py` | Семь linear layers декодера, пять значений числа токенов, измерения через CUDA graph (шаг 3) |
+| `benchmarks/eval_llama.py` | Perplexity на WikiText-2, скорость prefill/decode, использование памяти и примеры генерации (шаг 5) |
 
-## 1. Quantization and storage
+## 1. Квантование и хранение
 
-Asymmetric round-to-nearest INT4 quantization uses groups of 128 weights along K by default. Each group's range includes zero:
+Используется асимметричное INT4-квантование с округлением к ближайшему значению. По умолчанию группа содержит 128 весов вдоль K. Диапазон каждой группы расширяется так, чтобы включать ноль:
 
 `scale = (max - min) / 15`, `zero = floor(-min / scale + 0.5)`, `q = clamp(floor(w / scale + 0.5) + zero, 0, 15)`.
 
-The scale is rounded to fp16 before quantization; an all-zero group uses scale 1. Storage for `W[N,K]`:
+Перед квантованием масштаб округляется до fp16; для полностью нулевой группы используется масштаб 1. Формат хранения матрицы `W[N,K]`:
 
-* `qweight`: `int32[K/8,N]`, with eight consecutive K values packed into each word;
+* `qweight`: `int32[K/8,N]`; каждое слово содержит восемь последовательных значений вдоль K;
 * `scales`, `zeros`: `fp16[K/G,N]`.
 
-Packed weights take **exactly 4× less memory** than fp16/bf16. Including scales and zero points at G=128 gives **3.76×** compression. Decoder linear weights occupy 1856 MiB before quantization and 493 MiB afterward. These counts exclude the tied embedding/output table unless `--quantize-lm-head` is passed.
+Упакованные веса занимают **ровно в 4 раза меньше памяти**, чем fp16/bf16. С учётом масштабов и нулевых точек при G=128 сжатие составляет **3.76×**. Веса линейных слоёв декодера занимают 1856 MiB до квантования и 493 MiB после. Эти значения не включают общую таблицу весов embeddings и выходной проекции, если не указан `--quantize-lm-head`.
 
-## 2. H200 kernel changes
+## 2. Изменения kernels для H200
 
-* **Native bf16:** Ampere and newer load bf16 operands directly and use bf16 tensor-core `tl.dot` with fp32 accumulation. W4 dequantization computes `(q - zero) * scale` in fp32 and rounds once to the activation dtype. This avoids an unnecessary fp16 intermediate and matches the updated torch reference. The Volta bit-conversion fallback remains available; it was not revalidated on a V100 in this run.
-* **Prefill, M > 64:** grouped tiled GEMM with on-the-fly unpacking; the full dequantized weight matrix is never stored in global memory. Autotuning includes K tiles up to 128 and 2–4 pipeline stages.
-* **Small batches, 2 ≤ M ≤ 64:** each split-K block writes a separate fp32 partial result, then one reduction kernel sums and casts it. This replaces zero-fill + atomic GEMM + cast with two kernels and a deterministic reduction.
-* **One-token decode, M = 1:** a dedicated GEMV on Ampere and newer writes the output in one launch, without a scratch buffer or atomics. The W4 path loads packed words once and accumulates their eight nibbles in registers.
-* **Dispatch and tuning:** compiled launches are cached by shape, strides, dtype, group size, alignment and device. CUDA-graph autotuning measures GPU execution. Triton 3.1's autotuner uses independent streams, so first-time tuning synchronizes pending tensor operations; cached calls do not synchronize.
+* **Нативный bf16.** На Ampere и новее операнды bf16 загружаются напрямую, а `tl.dot` использует bf16 tensor cores с накоплением в fp32. При деквантизации W4 выражение `(q - zero) * scale` вычисляется в fp32 и один раз округляется до dtype активаций. Это убирает промежуточное округление в fp16 и соответствует обновлённой эталонной реализации на torch. Путь с побитовыми преобразованиями для Volta сохранён; повторная проверка на V100 в этой итерации не выполнялась.
+* **Prefill, M > 64.** Блочный GEMM с группировкой порядка запуска и распаковкой весов на лету. Полная деквантизированная матрица весов не записывается в глобальную память. Autotuning включает блоки K до 128 и выбор между 2–4 стадиями конвейера.
+* **Небольшие batches, 2 ≤ M ≤ 64.** Каждый split-K блок записывает отдельный частичный результат в fp32. Затем один kernel суммирует результаты и преобразует dtype. Вместо обнуления буфера, GEMM с атомиками и преобразования результата выполняются два kernels с детерминированной редукцией.
+* **Однотокенный decode, M = 1.** На Ampere и новее отдельный GEMV записывает результат за один запуск, без промежуточного буфера и атомиков. W4-путь однократно загружает упакованные слова и накапливает вклад восьми четырёхбитных значений в регистрах.
+* **Запуск и autotuning.** Скомпилированные kernels кешируются с учётом размерностей, strides, dtype, размера группы, выравнивания и устройства. Autotuning через CUDA graph измеряет время выполнения на GPU. В Triton 3.1 autotuner использует независимые streams, поэтому перед первым подбором конфигурации синхронизируются незавершённые операции с тензорами. Повторные вызовы из кеша не требуют синхронизации.
 
-## 3. GEMM measurements
+## 3. Измерения GEMM
 
-Each row sums GPU time for the seven linears in one decoder layer: q/o 2048×2048, k/v 512×2048, gate/up 8192×2048, down 2048×8192. All activations in the W4/W16 columns are bf16. Each callable is warmed before CUDA-graph replay (`rep=200` ms, Triton tester's ten timing repetitions); compilation and Python dispatch are excluded.
+Каждая строка содержит сумму GPU-времени семи линейных слоёв одного decoder block: q/o 2048×2048, k/v 512×2048, gate/up 8192×2048 и down 2048×8192. Активации в столбцах W4/W16 имеют dtype bf16. Каждый вызов прогревается перед воспроизведением CUDA graph: `rep=200` мс, десять повторений измерения средствами Triton. Компиляция и Python dispatch не учитываются.
 
-This is a repeated-weight microbenchmark, with substantial L2 reuse on H200. Summing isolated GEMMs does not measure whole-model latency or guarantee the same bandwidth behavior as streaming all model weights.
+В этом микробенчмарке веса используются повторно, что позволяет существенно задействовать L2 cache H200. Сумма отдельных GEMM не является задержкой полной модели; при последовательном чтении всех весов модели поведение памяти может отличаться.
 
-| tokens M | torch bf16, ms | torch fp16, ms | Triton W16, ms | Triton W4, ms | W4 speedup vs torch bf16 | W4 speedup vs Triton W16 |
+| Токены M | torch bf16, мс | torch fp16, мс | Triton W16, мс | Triton W4, мс | Ускорение W4 к torch bf16 | Ускорение W4 к Triton W16 |
 |---|---|---|---|---|---|---|
 | 128 | 0.065 | 0.069 | 0.087 | **0.166** | 0.39× | 0.52× |
 | 512 | 0.140 | 0.141 | 0.142 | **0.316** | 0.44× | 0.45× |
@@ -64,9 +64,9 @@ This is a repeated-weight microbenchmark, with substantial L2 reuse on H200. Sum
 | 1 | 0.051 | 0.052 | 0.029 | **0.045** | 1.13× | 0.66× |
 | 16 | 0.059 | 0.054 | 0.074 | **0.068** | 0.87× | 1.10× |
 
-The original V100-oriented code was also measured on the H200, before changing the kernels. This compares implementations on the same physical GPU, rather than comparing V100 against H200:
+Исходная версия кода, ориентированная на V100, также измерена на H200 до изменения kernels. Следующая таблица сравнивает реализации на одной физической GPU и показывает эффект изменений кода:
 
-| tokens M | original W4 on H200, ms | optimized W4 on H200, ms | speedup |
+| Токены M | Исходный W4 на H200, мс | Оптимизированный W4 на H200, мс | Ускорение |
 |---|---|---|---|
 | 128 | 0.247 | 0.166 | 1.49× |
 | 512 | 0.389 | 0.316 | 1.23× |
@@ -74,36 +74,40 @@ The original V100-oriented code was also measured on the H200, before changing t
 | 1 | 0.099 | 0.045 | 2.21× |
 | 16 | 0.114 | 0.068 | 1.68× |
 
-Raw results: [optimized GEMMs](results/h200/gemm.json), [original kernels on H200](results/h200/gemm_before.json), [per-shape timings](results/h200/logs/bench_gemm.log).
+Исходные данные: [оптимизированные GEMM](results/h200/gemm.json), [исходные kernels на H200](results/h200/gemm_before.json), [время для каждой размерности](results/h200/logs/bench_gemm.log).
 
-Native bf16 removes the V100 baseline disadvantage: cuBLAS bf16 and fp16 are now comparable. INT4 compression alone does not ensure a speedup; unpacking/dequantization and the chosen tile layout still cost time, especially for prefill. Ratios below 1 in the table mean W4 is slower than that baseline.
+На H200 cuBLAS bf16 и fp16 показывают сопоставимую скорость благодаря нативной поддержке bf16. Само сжатие весов в INT4 не гарантирует ускорения: распаковка, деквантизация и выбранная раскладка блоков требуют времени, особенно при prefill. Коэффициент меньше 1 в таблице означает, что W4 медленнее соответствующей базовой реализации.
 
-## 4–5. Llama-3.2-1B-Instruct evaluation
+## 4–5. Оценка Llama-3.2-1B-Instruct
 
-Checkpoint: `unsloth/Llama-3.2-1B-Instruct`, revision `5a8abab4a5d6f164389b1079fb721cfab8d7126c`. Every row evaluates the WikiText-2-raw-v1 **test** split using all **141 non-overlapping windows of 2048 tokens**, predicting tokens 2–2048 in each window. Lower perplexity is better.
+Checkpoint: `unsloth/Llama-3.2-1B-Instruct`, revision `5a8abab4a5d6f164389b1079fb721cfab8d7126c`. Для каждой строки используется **test** split WikiText-2-raw-v1: все **141 неперекрывающееся окно по 2048 токенов**, с предсказанием токенов со второго по последний в каждом окне. Чем ниже perplexity, тем лучше.
 
-Prefill below is a CUDA-graph forward pass over one 2048-token window, including attention and the full logits projection. The JSON files separately retain eager wall time averaged across all perplexity windows. Decode uses a 128-token prompt, 128 generated tokens, a static KV cache, and an autoregressive CUDA graph that includes token copying and cache-position updates. Its tok/s column measures the complete replay loop; GPU-event and eager timings are also saved. These timing changes make the H200 model rows internally comparable, but not directly interchangeable with the historical V100 timing columns.
+**Prefill** — обработка исходного промпта. В таблице измеряется forward для одного окна из 2048 токенов через CUDA graph, включая attention и полную проекцию в logits. В JSON отдельно сохранено среднее время eager-вызова по всем окнам оценки perplexity.
 
-`lm_head` stays bf16 by default and shares the embedding table. The `+lm_head` variant unties and quantizes that projection while preserving bf16 input embeddings. It therefore occupies more total memory than default W4: the formerly shared projection now needs a separate packed copy. Peak memory is allocated GPU memory during perplexity evaluation, in GiB; it is not total reserved memory.
+**Decode** — генерация по одному токену. Используются промпт из 128 токенов, 128 шагов генерации, статический KV cache и авторегрессионный CUDA graph, включающий копирование следующего токена и обновление позиции cache. Скорость decode учитывает полный цикл воспроизведения graph. Измерения через GPU events и время eager-вызовов также сохранены. Результаты H200 сопоставимы между собой, но не напрямую с историческими столбцами времени для V100, поскольку методика была обновлена.
 
-| model | WikiText-2 PPL ↓ | prefill graph, ms / 2048 tok | prefill tok/s | decode tok/s, graph | linear weights, MiB | whole model, MiB | peak, GiB |
-|---|---|---|---|---|---|---|---|---|
+По умолчанию `lm_head` остаётся bf16 и использует общие веса с embeddings. Вариант `+lm_head` разрывает эту связь и квантует выходную проекцию, сохраняя входные embeddings в bf16. Поэтому он занимает больше памяти, чем обычный W4: ранее общая проекция требует отдельной упакованной копии. Пиковая память — объём выделенной GPU-памяти во время оценки perplexity, в GiB; общий объём зарезервированной памяти сюда не входит.
+
+| Модель | PPL ↓ | Prefill, мс / 2048 ток. | Prefill, ток./с | Decode, ток./с | Веса linear, MiB | Вся модель, MiB | Пик, GiB |
+|---|---|---|---|---|---|---|---|
 | bf16 / cuBLAS | 13.165 | 14.03 | 145,963 | 379.4 | 1856 | 2357 | 4.84 |
 | fp16 / cuBLAS | 13.160 | 14.27 | 143,521 | 375.3 | 1856 | 2357 | 4.84 |
-| Triton W16, native bf16 | 13.165 | 14.11 | 145,150 | 432.7 | 1856 | 2357 | 4.81 |
+| Triton W16, нативный bf16 | 13.165 | 14.11 | 145,150 | 432.7 | 1856 | 2357 | 4.81 |
 | **Triton W4 g128** | 16.431 | 26.01 | 78,734 | 415.7 | 493 | 994 | 3.48 |
 | W4 g128 + lm_head | 16.815 | 28.78 | 71,164 | 419.8 | 626 | 1127 | 3.64 |
-| W4 g128 dequantized → torch bf16 | 16.431 | 13.99 | 146,400 | 380.2 | 1856 | 2357 | 4.84 |
+| W4 g128, деквантизация → torch bf16 | 16.431 | 13.99 | 146,400 | 380.2 | 1856 | 2357 | 4.84 |
 | W4 g64 | 15.419 | 26.86 | 76,246 | 414.6 | 522 | 1023 | 3.54 |
 | W4 g32 | 14.806 | 31.27 | 65,502 | 410.4 | 580 | 1081 | 3.60 |
 
-* **Kernel quality:** native Triton W4 g128 gives PPL **16.431**, versus **16.431** for the same weights dequantized and evaluated through torch bf16 (absolute difference 0.0000). Compare these two rows to isolate kernel error from quantization error.
-* **Quantization quality:** bf16 gives PPL 13.165; plain INT4 g128 gives 16.431. Smaller groups improve it to 15.419 at g64 and 14.806 at g32, with additional metadata storage. This implementation uses plain round-to-nearest quantization, without calibration.
-* **Memory:** default W4 reduces decoder-linear weights from 1856 to 493 MiB and the whole model from 2357 to 994 MiB (2.37× smaller).
-* **End-to-end speed:** W4/bf16 speedup is 0.54× for prefill and 1.10× for graph decode. The full-model measurements, rather than the compression ratio, determine the actual performance benefit.
+Обе колонки скорости в таблице измерены с CUDA graph. Веса linear — веса линейных слоёв декодера; для варианта `+lm_head` также учтена выходная проекция.
 
-Per-mode JSON files and generated samples are in [results/h200](results/h200); complete run logs are in [results/h200/logs](results/h200/logs).
+* **Корректность kernel.** Нативный Triton W4 g128 даёт PPL **16.431**, как и те же веса после деквантизации и вычисления через torch bf16: абсолютная разница — 0.0000. Сравнение этих двух строк отделяет погрешность kernel от потери качества из-за квантования.
+* **Качество квантования.** bf16 даёт PPL 13.165, обычный INT4 g128 — 16.431. Меньшие группы улучшают результат до 15.419 при g64 и 14.806 при g32, но требуют больше памяти для метаданных. Используется простое квантование с округлением к ближайшему значению, без калибровки.
+* **Память.** W4 по умолчанию уменьшает объём весов линейных слоёв декодера с 1856 до 493 MiB, а всей модели — с 2357 до 994 MiB, то есть в 2.37 раза.
+* **Скорость полной модели.** Коэффициент ускорения W4 относительно bf16 составляет 0.54× для prefill и 1.10× для decode через graph. Таким образом, prefill медленнее, а decode быстрее. Фактический выигрыш определяется измерениями полной модели, а не степенью сжатия весов.
 
-## Correctness
+JSON для каждого режима и примеры генерации находятся в [results/h200](results/h200), полные логи запусков — в [results/h200/logs](results/h200/logs).
 
-**85 tests passed on H200.** The suite checks packed quantization against torch, compression and quantization error, fp16/bf16 GEMMs on all four distinct Llama projection shapes, non-divisible output dimensions, 3D inputs and bias. Added cases cover groups 32/64 across the decode/prefill boundary, non-contiguous activations, repeated cached launches and deterministic scratch-buffer reduction. Native bf16 inputs above fp16's maximum representable value are checked explicitly to catch accidental fp16 saturation. See [pytest.log](results/h200/logs/pytest.log).
+## Проверка корректности
+
+**85 тестов прошли на H200.** Набор проверяет соответствие квантования эталонной реализации на torch, сжатие и погрешность квантования, fp16/bf16 GEMM на всех четырёх различных размерностях проекций Llama, число выходных каналов, не кратное размеру блока, трёхмерные входы и bias. Добавлены проверки групп 32/64 на границе decode/prefill, активаций с нестандартными strides, повторных запусков из кеша и детерминированной редукции промежуточного буфера. Отдельно проверяются значения bf16 выше максимального представимого значения fp16, чтобы обнаруживать ошибочное ограничение диапазона. См. [pytest.log](results/h200/logs/pytest.log).
