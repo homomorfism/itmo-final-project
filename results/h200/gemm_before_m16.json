@@ -1,0 +1,116 @@
+{
+  "device": "NVIDIA H200",
+  "compute_capability": [
+    9,
+    0
+  ],
+  "cuda_visible_devices": "4",
+  "torch": "2.5.1+cu121",
+  "triton": "3.1.0",
+  "cuda": "12.1",
+  "timestamp_utc": "2026-10-24T12:05:31.862022+00:00",
+  "group_size": 128,
+  "timing": "CUDA graph replay, rep=200 ms",
+  "rows": [
+    {
+      "M": 16,
+      "layer": "q_proj",
+      "N": 2048,
+      "K": 2048,
+      "torch_bf16_ms": 0.006864230148494244,
+      "torch_fp16_ms": 0.00604682182893157,
+      "triton_w16_bf16_ms": 0.01508624292910099,
+      "triton_w4_bf16_ms": 0.013170963153243065,
+      "weight_bytes_bf16": 8388608,
+      "weight_bytes_int4": 2097152,
+      "weight_bytes_int4_with_scales": 2228224
+    },
+    {
+      "M": 16,
+      "layer": "k_proj",
+      "N": 512,
+      "K": 2048,
+      "torch_bf16_ms": 0.005487663205713034,
+      "torch_fp16_ms": 0.005078467540442944,
+      "triton_w16_bf16_ms": 0.010139509104192257,
+      "triton_w4_bf16_ms": 0.009352622553706169,
+      "weight_bytes_bf16": 2097152,
+      "weight_bytes_int4": 524288,
+      "weight_bytes_int4_with_scales": 557056
+    },
+    {
+      "M": 16,
+      "layer": "v_proj",
+      "N": 512,
+      "K": 2048,
+      "torch_bf16_ms": 0.005452019162476063,
+      "torch_fp16_ms": 0.005035424139350653,
+      "triton_w16_bf16_ms": 0.010128956288099289,
+      "triton_w4_bf16_ms": 0.009314337745308876,
+      "weight_bytes_bf16": 2097152,
+      "weight_bytes_int4": 524288,
+      "weight_bytes_int4_with_scales": 557056
+    },
+    {
+      "M": 16,
+      "layer": "o_proj",
+      "N": 2048,
+      "K": 2048,
+      "torch_bf16_ms": 0.006822100840508938,
+      "torch_fp16_ms": 0.005999996792525053,
+      "triton_w16_bf16_ms": 0.015066156163811684,
+      "triton_w4_bf16_ms": 0.013169093057513237,
+      "weight_bytes_bf16": 8388608,
+      "weight_bytes_int4": 2097152,
+      "weight_bytes_int4_with_scales": 2228224
+    },
+    {
+      "M": 16,
+      "layer": "gate_proj",
+      "N": 8192,
+      "K": 2048,
+      "torch_bf16_ms": 0.010226612910628319,
+      "torch_fp16_ms": 0.009684393182396889,
+      "triton_w16_bf16_ms": 0.023194048553705215,
+      "triton_w4_bf16_ms": 0.021756332367658615,
+      "weight_bytes_bf16": 33554432,
+      "weight_bytes_int4": 8388608,
+      "weight_bytes_int4_with_scales": 8912896
+    },
+    {
+      "M": 16,
+      "layer": "up_proj",
+      "N": 8192,
+      "K": 2048,
+      "torch_bf16_ms": 0.010208233259618282,
+      "torch_fp16_ms": 0.009581145830452442,
+      "triton_w16_bf16_ms": 0.02090412750840187,
+      "triton_w4_bf16_ms": 0.021702170372009277,
+      "weight_bytes_bf16": 33554432,
+      "weight_bytes_int4": 8388608,
+      "weight_bytes_int4_with_scales": 8912896
+    },
+    {
+      "M": 16,
+      "layer": "down_proj",
+      "N": 2048,
+      "K": 8192,
+      "torch_bf16_ms": 0.013856127858161926,
+      "torch_fp16_ms": 0.012923303060233593,
+      "triton_w16_bf16_ms": 0.030649268999695778,
+      "triton_w4_bf16_ms": 0.025216886773705482,
+      "weight_bytes_bf16": 33554432,
+      "weight_bytes_int4": 8388608,
+      "weight_bytes_int4_with_scales": 8912896
+    }
+  ],
+  "per_layer_totals": [
+    {
+      "torch_bf16_ms": 0.058916987385600805,
+      "torch_fp16_ms": 0.05434955237433314,
+      "triton_w16_bf16_ms": 0.12516830954700708,
+      "triton_w4_bf16_ms": 0.11368240602314472,
+      "M": 16
+    }
+  ]
+}

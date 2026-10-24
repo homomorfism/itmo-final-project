@@ -8,7 +8,7 @@ Usage:
     uv run python -m benchmarks.eval_llama --mode bf16
     uv run python -m benchmarks.eval_llama --mode w4 [--quantize-lm-head]
 Modes:
-    bf16        torch nn.Linear, bf16 (cuBLAS; no bf16 tensor cores on V100)
+    bf16        torch nn.Linear, bf16 (native cuBLAS tensor cores on Ampere and newer)
     fp16        torch nn.Linear, fp16 (cuBLAS tensor cores)
     triton-w16  bf16 weights, Triton W16A16 kernel (same kernel structure as W4, apples-to-apples)
     w4          int4 weights, Triton W4A16 kernel, bf16 activations
@@ -19,9 +19,12 @@ import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 
 import torch
 import torch.nn as nn
+import triton
+import triton.testing
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, StaticCache
 
@@ -80,10 +83,14 @@ def eval_ppl(model, tok, seqlen, max_windows=None):
         n = min(n, max_windows)
     ids = ids[:, : n * seqlen].view(n, seqlen)
 
-    # warmup (Triton autotuning / compilation happens here)
+    # Warm up before measuring or capturing graphs (Triton tuning happens here).
     for _ in range(2):
         model(ids[:1].cuda(), use_cache=False)
     torch.cuda.synchronize()
+    graph_batch = ids[:1].cuda()
+    with torch.cuda.stream(torch.cuda.Stream()):
+        graph_ms = triton.testing.do_bench_cudagraph(
+            lambda: model(graph_batch, use_cache=False), rep=200)
     torch.cuda.reset_peak_memory_stats()
 
     nlls, fwd_time = [], 0.0
@@ -104,6 +111,8 @@ def eval_ppl(model, tok, seqlen, max_windows=None):
         "prefill_total_s": fwd_time,
         "prefill_ms_per_window": fwd_time / n * 1e3,
         "prefill_tokens_per_s": n * seqlen / fwd_time,
+        "prefill_graph_ms_per_window": graph_ms,
+        "prefill_graph_tokens_per_s": seqlen / graph_ms * 1e3,
         "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30,
     }
 
@@ -128,7 +137,10 @@ def bench_decode(model, prompt_len=128, new_tokens=128, use_graph=True):
             past_key_values=cache,
             use_cache=True,
         ).logits
-        return logits[:, -1:].argmax(-1)
+        nxt = logits[:, -1:].argmax(-1)
+        static_ids.copy_(nxt)
+        static_pos.add_(1)
+        return nxt
 
     side = torch.cuda.Stream()
     side.wait_stream(torch.cuda.current_stream())
@@ -138,25 +150,37 @@ def bench_decode(model, prompt_len=128, new_tokens=128, use_graph=True):
     torch.cuda.current_stream().wait_stream(side)
     torch.cuda.synchronize()
 
+    def reset_prompt():
+        cache.reset()
+        fresh = model(input_ids=prompt, cache_position=torch.arange(prompt_len, device=dev),
+                      past_key_values=cache, use_cache=True)
+        static_ids.copy_(fresh.logits[:, -1:].argmax(-1))
+        static_pos.fill_(prompt_len)
+
+    reset_prompt()
+
     if use_graph:
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
             static_out = step()
         run = lambda: graph.replay() or static_out
+        reset_prompt()
     else:
         run = step
 
-    tokens = []
     torch.cuda.synchronize()
+    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
     t0 = time.perf_counter()
+    start.record()
     for _ in range(new_tokens):
-        nxt = run()
-        static_ids.copy_(nxt)
-        static_pos += 1
-        tokens.append(nxt)
+        run()
+    end.record()
     torch.cuda.synchronize()
     dt = time.perf_counter() - t0
-    return {"decode_tokens_per_s": new_tokens / dt, "decode_ms_per_token": dt / new_tokens * 1e3, "cuda_graph": use_graph}
+    gpu_ms = start.elapsed_time(end)
+    return {"decode_tokens_per_s": new_tokens / dt, "decode_ms_per_token": dt / new_tokens * 1e3,
+            "decode_gpu_tokens_per_s": new_tokens / gpu_ms * 1e3,
+            "decode_gpu_ms_per_token": gpu_ms / new_tokens, "cuda_graph": use_graph}
 
 
 @torch.no_grad()
@@ -202,6 +226,12 @@ def main():
         "group_size": args.group_size if args.mode.startswith("w4") else None,
         "quantize_lm_head": args.quantize_lm_head,
         "device": torch.cuda.get_device_name(),
+        "compute_capability": torch.cuda.get_device_capability(),
+        "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
+        "torch": torch.__version__, "triton": triton.__version__, "cuda": torch.version.cuda,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "model_id": MODEL_ID, "model_revision": model.config._commit_hash,
+        "decode_prompt_len": 128, "decode_new_tokens": 128,
         "quantize_time_s": quant_time,
         "linear_weight_bytes_before": lin_bytes_before,
         "linear_weight_bytes": linear_weight_bytes(model, args.quantize_lm_head),

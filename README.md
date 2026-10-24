@@ -1,92 +1,109 @@
 # INT4 weight quantization + W4A16 GEMM in Triton (Llama-3.2-1B-Instruct)
 
-Hardware: **Tesla V100-PCIE-16GB (sm_70)**, torch 2.5.1+cu121, Triton 3.1.0, transformers 4.49.
+Measured on **NVIDIA H200 (sm_90)** on 2026-10-24: Python 3.12.3, torch 2.5.1+cu121, Triton 3.1.0, transformers 4.49.0, NVIDIA driver 580.196.07. Native bf16 tensor cores are enabled. Dependencies are unchanged and installed with `uv sync --frozen`.
+
+Kernel measurements and correctness tests use physical GPU 4; model evaluations use physical GPU 5. Both were idle before use; final reported timing runs sharing a GPU are sequential. GPU identities and software versions are recorded in [hardware.json](results/h200/hardware.json). No power limits or clocks were changed.
 
 ```bash
-uv sync
-uv run pytest -q tests                                    # correctness (74 tests)
-uv run python -m benchmarks.bench_gemm                    # step 3: X16@W4^T vs X16@W16^T
-uv run python -m benchmarks.eval_llama --mode bf16        # step 5: baseline
-uv run python -m benchmarks.eval_llama --mode w4          # step 5: int4 model
+uv sync --frozen
+CUDA_VISIBLE_DEVICES=4 uv run pytest -q tests
+CUDA_VISIBLE_DEVICES=4 uv run python -m benchmarks.bench_gemm --out results/h200/gemm.json
+CUDA_VISIBLE_DEVICES=5 uv run python -m benchmarks.eval_llama --mode bf16 --out-dir results/h200
+CUDA_VISIBLE_DEVICES=5 uv run python -m benchmarks.eval_llama --mode w4 --out-dir results/h200
+# Other comparisons: --mode fp16 / triton-w16 / w4-fake
+# Quantize the output projection too: --mode w4 --quantize-lm-head
+# Smaller groups: --mode w4 --group-size 64 --out-dir results/h200/groupsize_g64
+#                --mode w4 --group-size 32 --out-dir results/h200/groupsize_g32
 ```
+
+All new measurements are in [results/h200](results/h200). The previous V100 report is preserved in [results/v100/README.md](results/v100/README.md); the historical V100 JSON files and logs remain at their original paths under `results/`. V100 and H200 numbers should not be mixed: the former uses fp16 emulation for bf16 and a different decode timing implementation.
 
 ## Layout
 
 | File | Content |
 |---|---|
-| `int4_triton/quantize.py` | Triton kernel: fp16/bf16 `W[N,K]` → int4, packed 8-per-`int32` (step 1) + torch reference |
-| `int4_triton/gemm.py` | Triton kernel `Y = X @ W^T`, X bf16/fp16, W int4 (dequantized on the fly) or bf16 (step 2) |
-| `int4_triton/qlinear.py` | `Int4Linear` + `quantize_model_linears(model)` (step 4) |
-| `int4_triton/utils.py` | bit-level bf16↔fp16/fp32 conversions (see the V100 notes) |
-| `benchmarks/bench_gemm.py` | GEMM benchmark on Llama-3.2-1B shapes (step 3) → `results/gemm.json` |
-| `benchmarks/eval_llama.py` | wikitext-2 perplexity, prefill/decode speed, memory (step 5) → `results/llama_*.json` |
+| `int4_triton/quantize.py` | Triton group-wise INT4 quantization, packed eight values per int32, and torch reference (step 1) |
+| `int4_triton/gemm.py` | Fused unpack/dequantize + GEMM, split-K reduction, decode GEMV, and W16 baseline (step 2) |
+| `int4_triton/qlinear.py` | `Int4Linear` and model conversion (step 4) |
+| `int4_triton/utils.py` | bf16 bit conversion helpers retained for the Volta fallback |
+| `benchmarks/bench_gemm.py` | Seven decoder-linear shapes, five token counts, CUDA-graph timing (step 3) |
+| `benchmarks/eval_llama.py` | WikiText-2 perplexity, prefill/decode timing, memory and sample generation (step 5) |
 
-## 1. Quantization kernel
+## 1. Quantization and storage
 
-Asymmetric group-wise int4 quantization (round-to-nearest), group size 128 along K by default:
-`scale = (max-min)/15`, `zero = round(-min/scale)`, `q = clamp(round(w/scale)+zero, 0, 15)`.
+Asymmetric round-to-nearest INT4 quantization uses groups of 128 weights along K by default. Each group's range includes zero:
 
-* `qweight`: `int32 [K/8, N]`, 8 nibbles packed along K (GPTQ-style layout, coalesced loads along N in the GEMM).
-* `scales`, `zeros`: `fp16 [K/G, N]`.
+`scale = (max - min) / 15`, `zero = floor(-min / scale + 0.5)`, `q = clamp(floor(w / scale + 0.5) + zero, 0, 15)`.
 
-Packed weight memory is **exactly 4× smaller** than fp16. This is checked in `test_memory_reduction_and_error`: `N*K*2` bytes become `N*K/2`. Counting scales and zeros (fp16, G=128), it is **3.76×**.
-For all Llama decoder linears: 1856 MiB → 464 MiB packed, or 493 MiB with scales and zeros.
+The scale is rounded to fp16 before quantization; an all-zero group uses scale 1. Storage for `W[N,K]`:
 
-## 2. W4A16 GEMM kernel
+* `qweight`: `int32[K/8,N]`, with eight consecutive K values packed into each word;
+* `scales`, `zeros`: `fp16[K/G,N]`.
 
-The kernel is a tiled `tl.dot` GEMM with grouped launch order. Inside the K-loop it loads a `[BK/8, BN]` int32 tile once, unpacks it in registers to `[BK, BN]` nibbles, dequantizes `(q - z) * s` to fp16 and feeds it to the tensor cores. Accumulation is in fp32. The full-precision weight is never written to global memory. Two autotuned paths share the kernel body:
-* **M > 64** (prefill): plain tiles, output stored directly in bf16.
-* **M ≤ 64** (decode): **split-K**. Partial sums are `atomic_add`ed into an fp32 buffer, because there are too few output tiles to fill 80 SMs.
+Packed weights take **exactly 4× less memory** than fp16/bf16. Including scales and zero points at G=128 gives **3.76×** compression. Decoder linear weights occupy 1856 MiB before quantization and 493 MiB afterward. These counts exclude the tied embedding/output table unless `--quantize-lm-head` is passed.
 
-After the first autotuned call for a given shape, the compiled kernel is cached and launched directly. That bypasses roughly 250 µs per call of Triton 3.1 autotuner/JIT dispatch overhead.
+## 2. H200 kernel changes
 
-### V100-specific notes (important)
-* `tl.dot` on **bf16** operands compiles on sm_70 but **returns wrong results** (max abs error about 850 on a 4096³ test). Converting bf16 with `.to()` fails in ptxas (`cvt.bf16` needs sm_80).
-  So bf16 tensors are passed as raw `int16` bits, converted with shifts and bitcasts, and the matmul runs on **fp16 tensor cores** with fp32 accumulation. The output is rounded back to bf16 with round-to-nearest-even.
-  bf16→fp16 is exact for |x| < 65504; larger values saturate.
-* V100 has **no bf16 tensor cores**, so cuBLAS bf16 (`torch bf16` below) is about 7× slower than cuBLAS fp16. Below I report both the literal baseline (torch bf16) and fairer ones: torch fp16 and Triton W16, which is the same kernel with bf16 weights.
+* **Native bf16:** Ampere and newer load bf16 operands directly and use bf16 tensor-core `tl.dot` with fp32 accumulation. W4 dequantization computes `(q - zero) * scale` in fp32 and rounds once to the activation dtype. This avoids an unnecessary fp16 intermediate and matches the updated torch reference. The Volta bit-conversion fallback remains available; it was not revalidated on a V100 in this run.
+* **Prefill, M > 64:** grouped tiled GEMM with on-the-fly unpacking; the full dequantized weight matrix is never stored in global memory. Autotuning includes K tiles up to 128 and 2–4 pipeline stages.
+* **Small batches, 2 ≤ M ≤ 64:** each split-K block writes a separate fp32 partial result, then one reduction kernel sums and casts it. This replaces zero-fill + atomic GEMM + cast with two kernels and a deterministic reduction.
+* **One-token decode, M = 1:** a dedicated GEMV on Ampere and newer writes the output in one launch, without a scratch buffer or atomics. The W4 path loads packed words once and accumulates their eight nibbles in registers.
+* **Dispatch and tuning:** compiled launches are cached by shape, strides, dtype, group size, alignment and device. CUDA-graph autotuning measures GPU execution. Triton 3.1's autotuner uses independent streams, so first-time tuning synchronizes pending tensor operations; cached calls do not synchronize.
 
-## 3. GEMM benchmark (`results/gemm.json`)
+## 3. GEMM measurements
 
-The table shows GPU time in ms, the sum over the 7 linears of one Llama-3.2-1B decoder layer (q 2048×2048, k/v 512×2048, o 2048×2048, gate/up 8192×2048, down 2048×8192). Timings use CUDA-graph replay to exclude Python overhead; the host was heavily loaded.
+Each row sums GPU time for the seven linears in one decoder layer: q/o 2048×2048, k/v 512×2048, gate/up 8192×2048, down 2048×8192. All activations in the W4/W16 columns are bf16. Each callable is warmed before CUDA-graph replay (`rep=200` ms, Triton tester's ten timing repetitions); compilation and Python dispatch are excluded.
 
-| tokens M | torch bf16 (X16@W16ᵀ) | torch fp16 | Triton W16 (bf16) | **Triton W4 (bf16)** | W4 vs torch bf16 | W4 vs torch fp16 | W4 vs Triton W16 |
-|---|---|---|---|---|---|---|---|
-| 128  | 3.614 | 0.408 | 0.636 | **0.651** | 5.55× | 0.63× | 0.98× |
-| 512  | 7.436 | 0.962 | 1.470 | **1.662** | 4.47× | 0.58× | 0.88× |
-| 2048 | 25.331 | 3.306 | 4.797 | **5.517** | 4.59× | 0.60× | 0.87× |
-| 1 (decode)  | 0.176 | 0.177 | 0.276 | 0.218 | 0.81× | 0.81× | 1.27× |
-| 16 (decode) | 3.331 | 0.232 | 0.298 | 0.265 | 12.6× | 0.87× | 1.12× |
+This is a repeated-weight microbenchmark, with substantial L2 reuse on H200. Summing isolated GEMMs does not measure whole-model latency or guarantee the same bandwidth behavior as streaming all model weights.
 
-Per-shape numbers are in `results/logs/bench_gemm.log`.
+| tokens M | torch bf16, ms | torch fp16, ms | Triton W16, ms | Triton W4, ms | W4 speedup vs torch bf16 | W4 speedup vs Triton W16 |
+|---|---|---|---|---|---|---|
+| 128 | 0.065 | 0.069 | 0.087 | **0.166** | 0.39× | 0.52× |
+| 512 | 0.140 | 0.141 | 0.142 | **0.316** | 0.44× | 0.45× |
+| 2048 | 0.410 | 0.420 | 0.412 | **1.064** | 0.39× | 0.39× |
+| 1 | 0.051 | 0.052 | 0.029 | **0.045** | 1.13× | 0.66× |
+| 16 | 0.059 | 0.054 | 0.074 | **0.068** | 0.87× | 1.10× |
 
-Takeaways:
-* For M ≥ 128 the GEMM is compute-bound, so int4 cannot speed it up. Dequantization costs 0–13% compared with the same kernel on bf16 weights.
-* Compared with the literal baseline (`bf16 @ bf16` via cuBLAS), W4 is **4.5–5.5× faster**. That is mostly because the kernel uses fp16 tensor cores, which cuBLAS bf16 cannot on V100.
-* Triton on Volta reaches about 60–70% of cuBLAS fp16. Triton 3.x has no `cp.async` pipelining for sm_70.
-* For decode-sized M (memory-bound), W4 beats Triton W16 by 1.1–1.3× and beats cuBLAS on the K=8192 shape (M=16: 0.059 ms vs 0.056/0.079 ms). It is still slower than cuBLAS for small matrices, where the split-K zero-init and cast kernels dominate.
+The original V100-oriented code was also measured on the H200, before changing the kernels. This compares implementations on the same physical GPU, rather than comparing V100 against H200:
 
-## 4–5. Quantized Llama-3.2-1B-Instruct (`results/llama_*.json`)
+| tokens M | original W4 on H200, ms | optimized W4 on H200, ms | speedup |
+|---|---|---|---|
+| 128 | 0.247 | 0.166 | 1.49× |
+| 512 | 0.389 | 0.316 | 1.23× |
+| 2048 | 1.186 | 1.064 | 1.12× |
+| 1 | 0.099 | 0.045 | 2.21× |
+| 16 | 0.114 | 0.068 | 1.68× |
 
-wikitext-2-raw-v1 test split, contexts of 2048 tokens (141 windows, non-overlapping). The prefill time is a forward pass over one 2048-token window. Decode is single-token steps with a static KV cache and **CUDA graph** (prompt 128, 128 new tokens). The "eager" column is CPU-bound on this shared host (load average around 90), so it is not representative.
-By default `lm_head` (tied with embeddings) stays bf16. The `+lm_head` row quantizes it too.
+Raw results: [optimized GEMMs](results/h200/gemm.json), [original kernels on H200](results/h200/gemm_before.json), [per-shape timings](results/h200/logs/bench_gemm.log).
 
-| model | linears | wikitext-2 PPL | prefill ms / 2048 tok | prefill tok/s | decode tok/s (graph) | linear weights | whole model | peak mem |
+Native bf16 removes the V100 baseline disadvantage: cuBLAS bf16 and fp16 are now comparable. INT4 compression alone does not ensure a speedup; unpacking/dequantization and the chosen tile layout still cost time, especially for prefill. Ratios below 1 in the table mean W4 is slower than that baseline.
+
+## 4–5. Llama-3.2-1B-Instruct evaluation
+
+Checkpoint: `unsloth/Llama-3.2-1B-Instruct`, revision `5a8abab4a5d6f164389b1079fb721cfab8d7126c`. Every row evaluates the WikiText-2-raw-v1 **test** split using all **141 non-overlapping windows of 2048 tokens**, predicting tokens 2–2048 in each window. Lower perplexity is better.
+
+Prefill below is a CUDA-graph forward pass over one 2048-token window, including attention and the full logits projection. The JSON files separately retain eager wall time averaged across all perplexity windows. Decode uses a 128-token prompt, 128 generated tokens, a static KV cache, and an autoregressive CUDA graph that includes token copying and cache-position updates. Its tok/s column measures the complete replay loop; GPU-event and eager timings are also saved. These timing changes make the H200 model rows internally comparable, but not directly interchangeable with the historical V100 timing columns.
+
+`lm_head` stays bf16 by default and shares the embedding table. The `+lm_head` variant unties and quantizes that projection while preserving bf16 input embeddings. It therefore occupies more total memory than default W4: the formerly shared projection now needs a separate packed copy. Peak memory is allocated GPU memory during perplexity evaluation, in GiB; it is not total reserved memory.
+
+| model | WikiText-2 PPL ↓ | prefill graph, ms / 2048 tok | prefill tok/s | decode tok/s, graph | linear weights, MiB | whole model, MiB | peak, GiB |
 |---|---|---|---|---|---|---|---|---|
-| bf16 (torch, cuBLAS) | bf16 | **13.163** | 700 | 2 924 | 139.6 | 1856 MiB | 2357 MiB | 4.76 GB |
-| fp16 (torch, cuBLAS) | fp16 | 13.160 | 94 | 21 801 | 155.1 | 1856 MiB | 2357 MiB | 4.76 GB |
-| Triton W16 (bf16) | bf16 | 13.164 | 367 | 5 584 | 108.7 | 1856 MiB | 2357 MiB | 4.76 GB |
-| **Triton W4 g128 (bf16 act.)** | int4 | **16.435** | **384** | **5 337** | 125.2 | **493 MiB** | **994 MiB** | 3.43 GB |
-| Triton W4 g128 + lm_head | int4 | 16.816 | 297 | 6 895 | 127.9 | 626 MiB* | 1127 MiB | 3.56 GB |
-| W4 g128 dequantized → torch bf16 (reference) | bf16 | 16.432 | 700 | 2 926 | 139.9 | – | – | – |
-| Triton W4 g64 | int4 | 15.420 | 382 | 5 368 | – | 522 MiB | – | – |
-| Triton W4 g32 | int4 | 14.808 | 382 | 5 362 | – | 580 MiB | – | – |
+| bf16 / cuBLAS | 13.165 | 14.03 | 145,963 | 379.4 | 1856 | 2357 | 4.84 |
+| fp16 / cuBLAS | 13.160 | 14.27 | 143,521 | 375.3 | 1856 | 2357 | 4.84 |
+| Triton W16, native bf16 | 13.165 | 14.11 | 145,150 | 432.7 | 1856 | 2357 | 4.81 |
+| **Triton W4 g128** | 16.431 | 26.01 | 78,734 | 415.7 | 493 | 994 | 3.48 |
+| W4 g128 + lm_head | 16.815 | 28.78 | 71,164 | 419.8 | 626 | 1127 | 3.64 |
+| W4 g128 dequantized → torch bf16 | 16.431 | 13.99 | 146,400 | 380.2 | 1856 | 2357 | 4.84 |
+| W4 g64 | 15.419 | 26.86 | 76,246 | 414.6 | 522 | 1023 | 3.54 |
+| W4 g32 | 14.806 | 31.27 | 65,502 | 410.4 | 580 | 1081 | 3.60 |
 
-\* Includes the int4 lm_head. The bf16 embedding table is still kept for the input embeddings.
+* **Kernel quality:** native Triton W4 g128 gives PPL **16.431**, versus **16.431** for the same weights dequantized and evaluated through torch bf16 (absolute difference 0.0000). Compare these two rows to isolate kernel error from quantization error.
+* **Quantization quality:** bf16 gives PPL 13.165; plain INT4 g128 gives 16.431. Smaller groups improve it to 15.419 at g64 and 14.806 at g32, with additional metadata storage. This implementation uses plain round-to-nearest quantization, without calibration.
+* **Memory:** default W4 reduces decoder-linear weights from 1856 to 493 MiB and the whole model from 2357 to 994 MiB (2.37× smaller).
+* **End-to-end speed:** W4/bf16 speedup is 0.54× for prefill and 1.10× for graph decode. The full-model measurements, rather than the compression ratio, determine the actual performance benefit.
 
-Conclusions:
-* **The kernel is exact with respect to the quantization**. The Triton W4 model gives PPL 16.435, against 16.432 for the same int4 weights dequantized and run through torch. The remaining difference is fp16 versus bf16 rounding of activations.
-* **PPL degradation (13.16 → 16.44) comes from plain round-to-nearest quantization**. Llama-3 models are known to be sensitive to it. Smaller groups help: g64 gives 15.42 and g32 gives 14.81, for slightly more memory. GPTQ or AWQ would close most of the remaining gap, and the kernel/storage format is compatible with them.
-* **Memory**: decoder linear weights take 3.76× less space (1856 → 493 MiB), the whole model 2.4× less (2357 → 994 MiB), and peak memory during evaluation drops from 4.76 to 3.43 GB.
-* **Prefill speed**: 1.8× faster than the bf16 baseline (2.3× with int4 lm_head), and on par with Triton W16. On V100 the honest upper bound is cuBLAS fp16. Running the whole model in fp16 is 4× faster still, because attention, lm_head and the other bf16 ops also miss the tensor cores.
-* **Decode**: with CUDA graphs W4 is 10% slower than bf16. On a 1B model, decode on V100 is dominated by dozens of small non-GEMM kernels, and the M=1 W4 path launches 3 kernels per linear (zero-init, split-K GEMM, cast). A dedicated GEMV kernel without `tl.dot` or atomics would be the next step.
+Per-mode JSON files and generated samples are in [results/h200](results/h200); complete run logs are in [results/h200/logs](results/h200/logs).
+
+## Correctness
+
+**85 tests passed on H200.** The suite checks packed quantization against torch, compression and quantization error, fp16/bf16 GEMMs on all four distinct Llama projection shapes, non-divisible output dimensions, 3D inputs and bias. Added cases cover groups 32/64 across the decode/prefill boundary, non-contiguous activations, repeated cached launches and deterministic scratch-buffer reduction. Native bf16 inputs above fp16's maximum representable value are checked explicitly to catch accidental fp16 saturation. See [pytest.log](results/h200/logs/pytest.log).

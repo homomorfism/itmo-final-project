@@ -1,0 +1,13 @@
+device: NVIDIA H200  torch 2.5.1+cu121  triton 3.1.0
+M=   16 q_proj     [ 2048x 2048]  torch bf16   0.007 ms | torch fp16   0.006 | triton W16   0.015 | triton W4   0.013
+M=   16 k_proj     [  512x 2048]  torch bf16   0.005 ms | torch fp16   0.005 | triton W16   0.010 | triton W4   0.009
+M=   16 v_proj     [  512x 2048]  torch bf16   0.005 ms | torch fp16   0.005 | triton W16   0.010 | triton W4   0.009
+M=   16 o_proj     [ 2048x 2048]  torch bf16   0.007 ms | torch fp16   0.006 | triton W16   0.015 | triton W4   0.013
+M=   16 gate_proj  [ 8192x 2048]  torch bf16   0.010 ms | torch fp16   0.010 | triton W16   0.023 | triton W4   0.022
+M=   16 up_proj    [ 8192x 2048]  torch bf16   0.010 ms | torch fp16   0.010 | triton W16   0.021 | triton W4   0.022
+M=   16 down_proj  [ 2048x 8192]  torch bf16   0.014 ms | torch fp16   0.013 | triton W16   0.031 | triton W4   0.025
+
+Per decoder layer (sum of 7 linears), ms:
+| M | torch bf16 | torch fp16 | Triton W16 (bf16) | Triton W4 (bf16) | W4 speedup vs torch bf16 | vs torch fp16 | vs Triton W16 |
+|---|---|---|---|---|---|---|---|
+| 16 | 0.059 | 0.054 | 0.125 | 0.114 | 0.52x | 0.48x | 1.10x |

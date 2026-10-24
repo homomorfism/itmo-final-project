@@ -81,3 +81,30 @@ def test_int4_linear_3d_input():
     out = q(x)
     assert out.shape == (2, 33, 512)
     torch.testing.assert_close(out.float(), ref, rtol=2e-2, atol=2e-2 * ref.abs().max().item())
+
+
+@pytest.mark.parametrize("M", [1, 16, 64, 65])
+@pytest.mark.parametrize("group_size", [32, 64])
+def test_small_groups_strided_input_and_repeatability(M, group_size):
+    torch.manual_seed(1)
+    x = torch.randn(M, 512, device=DEV, dtype=torch.bfloat16)[:, ::2]
+    w = torch.randn(73, 256, device=DEV, dtype=torch.bfloat16) * 0.02
+    qw, s, z = quantize_int4(w, group_size)
+    ref = x.float() @ dequantize_int4_ref(qw, s, z, torch.bfloat16).float().t()
+    out = w4a16_matmul(x, qw, s, z)
+    torch.testing.assert_close(out.float(), ref, rtol=2e-2, atol=5e-3)
+    # Reusing a compiled specialization must not depend on old scratch-buffer contents.
+    torch.testing.assert_close(w4a16_matmul(x, qw, s, z), out, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("M", [1, 16, 65])
+def test_native_bf16_preserves_large_activation_range(M):
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("native bf16 tensor cores require Ampere or newer")
+    x = torch.full((M, 128), 131072.0, device=DEV, dtype=torch.bfloat16)
+    w = torch.full((73, 128), 0.5, device=DEV, dtype=torch.bfloat16)
+    ref = torch.nn.functional.linear(x, w)
+    torch.testing.assert_close(w16a16_matmul(x, w), ref, rtol=0, atol=0)
+    qw, s, z = quantize_int4(w)
+    ref4 = torch.nn.functional.linear(x, dequantize_int4_ref(qw, s, z, torch.bfloat16))
+    torch.testing.assert_close(w4a16_matmul(x, qw, s, z), ref4, rtol=0, atol=0)

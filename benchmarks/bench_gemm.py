@@ -4,6 +4,9 @@ Usage: uv run python -m benchmarks.bench_gemm [--out results/gemm.json]
 """
 import argparse
 import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -37,12 +40,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/gemm.json")
     ap.add_argument("--group-size", type=int, default=128)
+    ap.add_argument("--tokens", type=int, nargs="+", default=TOKENS + DECODE_TOKENS)
     args = ap.parse_args()
 
     torch.manual_seed(0)
     print(f"device: {torch.cuda.get_device_name()}  torch {torch.__version__}  triton {triton.__version__}")
     rows = []
-    for M in TOKENS + DECODE_TOKENS:
+    for M in args.tokens:
         for name, (N, K) in LLAMA_1B_LINEARS.items():
             x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
             w = torch.randn(N, K, device="cuda", dtype=torch.bfloat16) * 0.02
@@ -70,7 +74,7 @@ def main():
     print("| M | torch bf16 | torch fp16 | Triton W16 (bf16) | Triton W4 (bf16) | W4 speedup vs torch bf16 | vs torch fp16 | vs Triton W16 |")
     print("|---|---|---|---|---|---|---|---|")
     totals = []
-    for M in TOKENS + DECODE_TOKENS:
+    for M in args.tokens:
         sel = [r for r in rows if r["M"] == M]
         t = {k: sum(r[k] for r in sel) for k in ("torch_bf16_ms", "torch_fp16_ms", "triton_w16_bf16_ms", "triton_w4_bf16_ms")}
         t["M"] = M
@@ -81,8 +85,17 @@ def main():
             f"{t['torch_bf16_ms'] / w4:.2f}x | {t['torch_fp16_ms'] / w4:.2f}x | {t['triton_w16_bf16_ms'] / w4:.2f}x |"
         )
 
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
-        json.dump({"device": torch.cuda.get_device_name(), "rows": rows, "per_layer_totals": totals}, f, indent=2)
+        json.dump({
+            "device": torch.cuda.get_device_name(),
+            "compute_capability": torch.cuda.get_device_capability(),
+            "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
+            "torch": torch.__version__, "triton": triton.__version__, "cuda": torch.version.cuda,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "group_size": args.group_size, "timing": "CUDA graph replay, rep=200 ms",
+            "rows": rows, "per_layer_totals": totals,
+        }, f, indent=2)
 
 
 if __name__ == "__main__":

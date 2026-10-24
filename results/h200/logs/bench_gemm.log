@@ -1,0 +1,45 @@
+device: NVIDIA H200  torch 2.5.1+cu121  triton 3.1.0
+M=  128 q_proj     [ 2048x 2048]  torch bf16   0.008 ms | torch fp16   0.008 | triton W16   0.009 | triton W4   0.015
+M=  128 k_proj     [  512x 2048]  torch bf16   0.006 ms | torch fp16   0.006 | triton W16   0.009 | triton W4   0.014
+M=  128 v_proj     [  512x 2048]  torch bf16   0.006 ms | torch fp16   0.006 | triton W16   0.009 | triton W4   0.014
+M=  128 o_proj     [ 2048x 2048]  torch bf16   0.007 ms | torch fp16   0.008 | triton W16   0.009 | triton W4   0.015
+M=  128 gate_proj  [ 8192x 2048]  torch bf16   0.011 ms | torch fp16   0.011 | triton W16   0.012 | triton W4   0.028
+M=  128 up_proj    [ 8192x 2048]  torch bf16   0.011 ms | torch fp16   0.011 | triton W16   0.012 | triton W4   0.028
+M=  128 down_proj  [ 2048x 8192]  torch bf16   0.016 ms | torch fp16   0.020 | triton W16   0.028 | triton W4   0.051
+M=  512 q_proj     [ 2048x 2048]  torch bf16   0.011 ms | torch fp16   0.012 | triton W16   0.012 | triton W4   0.028
+M=  512 k_proj     [  512x 2048]  torch bf16   0.007 ms | torch fp16   0.008 | triton W16   0.009 | triton W4   0.015
+M=  512 v_proj     [  512x 2048]  torch bf16   0.007 ms | torch fp16   0.008 | triton W16   0.009 | triton W4   0.015
+M=  512 o_proj     [ 2048x 2048]  torch bf16   0.011 ms | torch fp16   0.013 | triton W16   0.012 | triton W4   0.028
+M=  512 gate_proj  [ 8192x 2048]  torch bf16   0.030 ms | torch fp16   0.031 | triton W16   0.028 | triton W4   0.063
+M=  512 up_proj    [ 8192x 2048]  torch bf16   0.031 ms | torch fp16   0.031 | triton W16   0.028 | triton W4   0.063
+M=  512 down_proj  [ 2048x 8192]  torch bf16   0.043 ms | torch fp16   0.039 | triton W16   0.045 | triton W4   0.104
+M= 2048 q_proj     [ 2048x 2048]  torch bf16   0.028 ms | torch fp16   0.028 | triton W16   0.026 | triton W4   0.063
+M= 2048 k_proj     [  512x 2048]  torch bf16   0.013 ms | torch fp16   0.011 | triton W16   0.013 | triton W4   0.028
+M= 2048 v_proj     [  512x 2048]  torch bf16   0.013 ms | torch fp16   0.011 | triton W16   0.012 | triton W4   0.028
+M= 2048 o_proj     [ 2048x 2048]  torch bf16   0.028 ms | torch fp16   0.028 | triton W16   0.027 | triton W4   0.063
+M= 2048 gate_proj  [ 8192x 2048]  torch bf16   0.111 ms | torch fp16   0.118 | triton W16   0.115 | triton W4   0.289
+M= 2048 up_proj    [ 8192x 2048]  torch bf16   0.112 ms | torch fp16   0.118 | triton W16   0.115 | triton W4   0.290
+M= 2048 down_proj  [ 2048x 8192]  torch bf16   0.105 ms | torch fp16   0.105 | triton W16   0.104 | triton W4   0.303
+M=    1 q_proj     [ 2048x 2048]  torch bf16   0.005 ms | torch fp16   0.006 | triton W16   0.003 | triton W4   0.004
+M=    1 k_proj     [  512x 2048]  torch bf16   0.003 ms | torch fp16   0.003 | triton W16   0.002 | triton W4   0.003
+M=    1 v_proj     [  512x 2048]  torch bf16   0.003 ms | torch fp16   0.003 | triton W16   0.002 | triton W4   0.003
+M=    1 o_proj     [ 2048x 2048]  torch bf16   0.005 ms | torch fp16   0.006 | triton W16   0.003 | triton W4   0.004
+M=    1 gate_proj  [ 8192x 2048]  torch bf16   0.012 ms | torch fp16   0.011 | triton W16   0.006 | triton W4   0.009
+M=    1 up_proj    [ 8192x 2048]  torch bf16   0.012 ms | torch fp16   0.011 | triton W16   0.006 | triton W4   0.009
+M=    1 down_proj  [ 2048x 8192]  torch bf16   0.010 ms | torch fp16   0.012 | triton W16   0.007 | triton W4   0.012
+M=   16 q_proj     [ 2048x 2048]  torch bf16   0.007 ms | torch fp16   0.006 | triton W16   0.008 | triton W4   0.007
+M=   16 k_proj     [  512x 2048]  torch bf16   0.005 ms | torch fp16   0.005 | triton W16   0.005 | triton W4   0.005
+M=   16 v_proj     [  512x 2048]  torch bf16   0.005 ms | torch fp16   0.005 | triton W16   0.005 | triton W4   0.005
+M=   16 o_proj     [ 2048x 2048]  torch bf16   0.007 ms | torch fp16   0.006 | triton W16   0.008 | triton W4   0.007
+M=   16 gate_proj  [ 8192x 2048]  torch bf16   0.010 ms | torch fp16   0.010 | triton W16   0.013 | triton W4   0.014
+M=   16 up_proj    [ 8192x 2048]  torch bf16   0.010 ms | torch fp16   0.010 | triton W16   0.013 | triton W4   0.014
+M=   16 down_proj  [ 2048x 8192]  torch bf16   0.014 ms | torch fp16   0.013 | triton W16   0.021 | triton W4   0.015
+
+Per decoder layer (sum of 7 linears), ms:
+| M | torch bf16 | torch fp16 | Triton W16 (bf16) | Triton W4 (bf16) | W4 speedup vs torch bf16 | vs torch fp16 | vs Triton W16 |
+|---|---|---|---|---|---|---|---|
+| 128 | 0.065 | 0.069 | 0.087 | 0.166 | 0.39x | 0.41x | 0.52x |
+| 512 | 0.140 | 0.141 | 0.142 | 0.316 | 0.44x | 0.45x | 0.45x |
+| 2048 | 0.410 | 0.420 | 0.412 | 1.064 | 0.39x | 0.39x | 0.39x |
+| 1 | 0.051 | 0.052 | 0.029 | 0.045 | 1.13x | 1.17x | 0.66x |
+| 16 | 0.059 | 0.054 | 0.074 | 0.068 | 0.87x | 0.80x | 1.10x |

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-24",
+  "device": "NVIDIA H200",
+  "compute_capability": [9, 0],
+  "memory_total_mib": 143771,
+  "driver": "580.196.07",
+  "torch": "2.5.1+cu121",
+  "triton": "3.1.0",
+  "cuda_runtime": "12.1",
+  "kernel_benchmarks_and_tests": {
+    "physical_gpu": 4,
+    "uuid": "GPU-bdd0418b-fc04-b56d-2359-43078d3e5062"
+  },
+  "model_evaluations": {
+    "physical_gpu": 5,
+    "uuid": "GPU-82a46098-7dbe-5cb7-0926-6ebebad8a2d8"
+  },
+  "isolation": "Each GPU was idle before use; final reported timing runs on each GPU are sequential, and kernel/model runs use separate GPUs. No clock or power settings changed."
+}

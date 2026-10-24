@@ -126,10 +126,10 @@ def unpack_int4_ref(qweight: torch.Tensor) -> torch.Tensor:
 
 
 def dequantize_int4_ref(qweight, scales, zeros, dtype=torch.float16) -> torch.Tensor:
-    """Reconstruct W_hat[N, K] from the packed representation."""
-    q = unpack_int4_ref(qweight).half()
+    """Reconstruct W_hat[N, K] in fp32, then round once to the requested dtype."""
+    q = unpack_int4_ref(qweight).float()
     N, K = q.shape
     G = K // scales.shape[0]
-    s = scales.t().repeat_interleave(G, dim=1)
-    z = zeros.t().repeat_interleave(G, dim=1)
+    s = scales.t().repeat_interleave(G, dim=1).float()
+    z = zeros.t().repeat_interleave(G, dim=1).float()
     return ((q - z) * s).to(dtype)
